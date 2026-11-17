@@ -1,0 +1,68 @@
+# Try the API without curl/Postman: install the "REST Client" extension, then click "Send Request"
+# above any request below. Start the API first (F5, or Terminal -> Run Task -> Run API).
+# Run them top to bottom the first time. (Interactive docs are also at http://localhost:8000/docs)
+
+@host = http://localhost:8000/api/v1
+
+### 1. Register (change the email if it already exists)
+POST {{host}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "owner@myshop.in",
+  "password": "a-long-passphrase",
+  "full_name": "Shop Owner"
+}
+
+### 2. Log in
+# @name login
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "owner@myshop.in",
+  "password": "a-long-passphrase"
+}
+
+### 3. Who am I
+GET {{host}}/auth/me
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 4. Create a company (also creates roles, financial year and invoice numbering)
+# @name company
+POST {{host}}/companies
+Authorization: Bearer {{login.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "name": "My Shop",
+  "gstin": "27ABCDE1234F1Z5",
+  "financial_year_start_month": 4
+}
+
+### 5. My companies
+GET {{host}}/companies
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### 6. Current company + my permissions (company-scoped calls need X-Company-Id)
+GET {{host}}/companies/current
+Authorization: Bearer {{login.response.body.$.access_token}}
+X-Company-Id: {{company.response.body.$.id}}
+
+### 7. Roles
+GET {{host}}/roles
+Authorization: Bearer {{login.response.body.$.access_token}}
+X-Company-Id: {{company.response.body.$.id}}
+
+### 8. Audit trail
+GET {{host}}/audit-events
+Authorization: Bearer {{login.response.body.$.access_token}}
+X-Company-Id: {{company.response.body.$.id}}
+
+### 9. Refresh the access token (paste your refresh_token from step 2's response)
+POST {{host}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "PASTE_REFRESH_TOKEN_HERE"
+}

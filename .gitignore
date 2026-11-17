@@ -1,0 +1,90 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files (keep .env.example, ignore local overrides)
+.env
+.env.local
+.env.*.local
+
+# -------------------------------------------------
+# Python / Django / Flask / general Python
+# -------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+frontend/
+venv/
+.venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.eggs/
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# -------------------------------------------------
+# Node / frontend
+# -------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+dist-ssr/
+build/
+.local/
+*.tgz
+*.tar.gz
+
+# -------------------------------------------------
+# Misc
+# -------------------------------------------------
+*.zip
+*.bak
+*.tmp
+*.swp
+
+# Debug / test scripts (temporary - review before committing)
+debug-*.ps1
+test-*.ps1
