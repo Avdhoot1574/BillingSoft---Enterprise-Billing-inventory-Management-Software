@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.context import CompanyContext
 from app.core.errors import AppError
 from app.modules.audit.service import record_audit
+from app.modules.invoices.service import payment_status
 
 
 def create_payment(
@@ -88,7 +89,7 @@ def create_payment(
             },
         )
 
-        for allocation in allocations:
+        for allocation in sorted(allocations, key=lambda a: str(a.get("sales_invoice_id") or a.get("purchase_bill_id"))):
             invoice_id = allocation.get("sales_invoice_id")
             bill_id = allocation.get("purchase_bill_id")
 
@@ -101,7 +102,7 @@ def create_payment(
 
                 invoice = db.execute(
                     text("""
-                        SELECT id, grand_total, status
+                        SELECT id, grand_total, paid_total, party_id, status
                         FROM sales_invoices
                         WHERE id = :id AND company_id = :company_id
                         FOR UPDATE
@@ -122,7 +123,7 @@ def create_payment(
 
                 bill = db.execute(
                     text("""
-                        SELECT id, grand_total, status
+                        SELECT id, grand_total, paid_total, party_id, status
                         FROM purchase_bills
                         WHERE id = :id AND company_id = :company_id
                         FOR UPDATE
@@ -133,6 +134,18 @@ def create_payment(
                 if not bill or bill["status"] != "posted":
                     raise AppError(400, "INVALID_PURCHASE_BILL",
                                    "Allocation requires a posted purchase bill")
+
+            document = invoice if invoice_id else bill
+            if document["party_id"] != data.get("party_id"):
+                raise AppError(400, "PAYMENT_PARTY_MISMATCH", "Payment party must match the document party")
+            table = "sales_invoices" if invoice_id else "purchase_bills"
+            new_paid = document["paid_total"] + allocation["amount"]
+            state = payment_status(new_paid, document["grand_total"])
+            db.execute(text(f"""
+                UPDATE {table} SET paid_total = :paid, payment_status = :state,
+                    version = version + 1, updated_at = now()
+                WHERE id = :id AND company_id = :company_id
+            """), {"paid": new_paid, "state": state, "id": invoice_id or bill_id, "company_id": ctx.company_id})
 
             db.execute(
                 text("""
@@ -272,6 +285,23 @@ def reverse_payment(
         if payment["status"] != "posted":
             raise AppError(409, "PAYMENT_NOT_REVERSIBLE",
                            "Only posted payments can be reversed")
+
+        allocations = db.execute(text("""
+            SELECT sales_invoice_id, purchase_bill_id, amount FROM payment_allocations
+            WHERE payment_id = :id AND company_id = :company_id
+        """), {"id": payment_id, "company_id": ctx.company_id}).mappings().all()
+        for allocation in sorted(allocations, key=lambda a: str(a["sales_invoice_id"] or a["purchase_bill_id"])):
+            table = "sales_invoices" if allocation["sales_invoice_id"] else "purchase_bills"
+            doc_id = allocation["sales_invoice_id"] or allocation["purchase_bill_id"]
+            params = {"id": doc_id, "company_id": ctx.company_id}
+            document = db.execute(text(f"SELECT paid_total, grand_total FROM {table} WHERE id = :id AND company_id = :company_id FOR UPDATE"), params).mappings().one()
+            paid = document["paid_total"] - allocation["amount"]
+            state = payment_status(paid, document["grand_total"])
+            db.execute(text(f"""
+                UPDATE {table} SET paid_total = :paid, payment_status = :state,
+                    version = version + 1, updated_at = now()
+                WHERE id = :id AND company_id = :company_id
+            """), {**params, "paid": paid, "state": state})
 
         db.execute(
             text("""

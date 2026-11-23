@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,7 +13,42 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT_DIR / ".env", extra="ignore")
 
     app_env: str = "dev"  # dev | test | staging | production
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/billing"
+
+    # Database: prefer DATABASE_URL if set; otherwise derive from Supabase credentials
+    database_url: str | None = None
+    supabase_url: str | None = None
+    supabase_secret_key: str | None = None
+
+    @property
+    def effective_database_url(self) -> str:
+        """Resolve the database URL: DATABASE_URL > Supabase-derived > default."""
+        if self.database_url:
+            return self.database_url
+        if self.supabase_url and self.supabase_secret_key:
+            return self._supabase_to_postgres_url()
+        # Fallback default (local dev)
+        return "postgresql+psycopg://postgres:postgres@localhost:5432/billing"
+
+    def _supabase_to_postgres_url(self) -> str:
+        """Convert Supabase URL + secret key into a PostgreSQL connection string.
+
+        Supabase URL format: https://<project-ref>.supabase.co
+        Derived PostgreSQL URL: postgresql+psycopg://postgres.<project-ref>:<secret-key>@db.<project-ref>.supabase.co:5432/postgres
+        """
+        parsed = urlsplit(self.supabase_url)
+        host = parsed.hostname or ""
+        parts = host.split(".")
+        if len(parts) >= 3 and parts[-2] == "supabase" and parts[-1] == "co":
+            project_ref = parts[0]
+            return (
+                f"postgresql+psycopg://postgres.{project_ref}:{self.supabase_secret_key}"
+                f"@db.{project_ref}.supabase.co:5432/postgres"
+            )
+        # If we can't parse the project ref, use the host as-is
+        return (
+            f"postgresql+psycopg://postgres:{self.supabase_secret_key}"
+            f"@{host}:5432/postgres"
+        )
 
     jwt_secret: str = _DEV_SECRET
     jwt_algorithm: str = "HS256"

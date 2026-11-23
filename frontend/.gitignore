@@ -31,3 +31,10 @@ pnpm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Package lock
+package-lock.json
+
+# Misc files not meant for version control
+requirements.txt
+

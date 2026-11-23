@@ -1,13 +1,8 @@
-import io
 import json
 import uuid
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from reportlab.lib.colors import HexColor, white
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -19,7 +14,22 @@ MONEY = Decimal("0.01")
 
 
 def money(value: Decimal) -> Decimal:
+    if not value.is_finite() or abs(value) >= Decimal("1000000000000000"):
+        raise AppError(400, "AMOUNT_OUT_OF_RANGE", "Amount exceeds supported monetary range")
     return value.quantize(MONEY, rounding=ROUND_HALF_UP)
+
+
+def payment_status(paid: Decimal, total: Decimal) -> str:
+    if paid < 0 or paid > total:
+        raise AppError(400, "INVALID_PAID_AMOUNT", "Paid amount must be between zero and invoice total")
+    return "paid" if paid == total else "partially_paid" if paid > 0 else "unpaid"
+
+
+def validate_warehouse(db, ctx, warehouse_id):
+    if warehouse_id and not db.execute(text("""
+        SELECT id FROM warehouses WHERE id = :id AND company_id = :company_id AND is_active = true
+    """), {"id": warehouse_id, "company_id": ctx.company_id}).first():
+        raise AppError(404, "WAREHOUSE_NOT_FOUND", "Active warehouse not found")
 
 
 def _current_period_id(db: Session, company_id: uuid.UUID) -> uuid.UUID:
@@ -177,6 +187,8 @@ def create_invoice(
                 if not item:
                     raise AppError(404, "ITEM_NOT_FOUND", "An invoice item was not found")
 
+            validate_warehouse(db, ctx, line.get("warehouse_id"))
+
             prepared_lines.append({
                 "id": uuid.uuid4(),
                 "line_number": index,
@@ -214,7 +226,7 @@ def create_invoice(
                 INSERT INTO sales_invoices (
                     id, company_id, party_id,
                     invoice_number, invoice_date, due_date,
-                    status, place_of_supply_state_code, supply_type,
+                    status, payment_status, paid_total, place_of_supply_state_code, supply_type,
                     customer_name_snapshot, customer_gstin_snapshot,
                     billing_address_snapshot, shipping_address_snapshot,
                     subtotal, discount_total, taxable_total,
@@ -225,7 +237,7 @@ def create_invoice(
                 VALUES (
                     :id, :company_id, :party_id,
                     NULL, :invoice_date, :due_date,
-                    'draft', :place_of_supply, :supply_type,
+                    'draft', :payment_status, :paid_total, :place_of_supply, :supply_type,
                     :customer_name, :customer_gstin,
                     CAST(:billing_address AS jsonb),
                     CAST(:shipping_address AS jsonb),
@@ -241,6 +253,8 @@ def create_invoice(
                 "party_id": party_id,
                 "invoice_date": data["invoice_date"],
                 "due_date": data.get("due_date"),
+                "payment_status": payment_status(money(Decimal(str(data.get("paid_amount", 0)))), grand_total),
+                "paid_total": money(Decimal(str(data.get("paid_amount", 0)))),
                 "place_of_supply": data.get("place_of_supply_state_code"),
                 "supply_type": data["supply_type"],
                 "customer_name": data["customer_name"],
@@ -396,7 +410,7 @@ def update_invoice(
     try:
         invoice = db.execute(
             text("""
-                SELECT id, status, version
+                SELECT *
                 FROM sales_invoices
                 WHERE id = :invoice_id AND company_id = :company_id
                 FOR UPDATE
@@ -413,7 +427,9 @@ def update_invoice(
         if invoice["status"] != "draft":
             raise AppError(409, "INVOICE_NOT_DRAFT", "Only draft invoices can be updated")
 
-        if data.get("due_date") and data.get("invoice_date") and data["due_date"] < data["invoice_date"]:
+        due_date = data.get("due_date", invoice["due_date"])
+        invoice_date = data.get("invoice_date", invoice["invoice_date"])
+        if due_date and due_date < invoice_date:
             raise AppError(400, "INVALID_DUE_DATE", "Due date cannot be before invoice date")
 
         if data.get("supply_type") and data["supply_type"] not in {
@@ -440,7 +456,7 @@ def update_invoice(
                   "version": invoice["version"]}
 
         def add(field: str, key: str, val):
-            if key in data and data[key] is not None:
+            if key in data:
                 set_fields.append(f"{field} = :{key}")
                 params[key] = val
 
@@ -450,7 +466,7 @@ def update_invoice(
         add("place_of_supply_state_code", "place_of_supply_state_code",
             data.get("place_of_supply_state_code"))
         add("supply_type", "supply_type", data.get("supply_type"))
-        add("customer_name_snapshot", "customer_name_snapshot", data.get("customer_name"))
+        add("customer_name_snapshot", "customer_name", data.get("customer_name"))
         add("customer_gstin_snapshot", "customer_gstin", data.get("customer_gstin"))
 
         if "billing_address" in data and data["billing_address"] is not None:
@@ -459,9 +475,16 @@ def update_invoice(
         if "shipping_address" in data and data["shipping_address"] is not None:
             set_fields.append("shipping_address_snapshot = CAST(:shipping_address AS jsonb)")
             params["shipping_address"] = json.dumps(data["shipping_address"])
-        add("other_charges", "other_charges", data.get("other_charges"))
         add("notes", "notes", data.get("notes"))
         add("terms", "terms", data.get("terms"))
+        add("paid_total", "paid_amount", data.get("paid_amount"))
+
+        # A supply or charge change also requires recalculating stored line totals.
+        if "lines" not in data and ({"supply_type", "other_charges"} & data.keys()):
+            stored = get_invoice(db, ctx, invoice_id)["lines"]
+            data["lines"] = [{**line, "item_name": line["item_name_snapshot"],
+                              "sku": line["sku_snapshot"], "hsn_sac": line["hsn_sac_snapshot"],
+                              "unit_name": line["unit_name_snapshot"]} for line in stored]
 
         # Recompute lines if provided
         if "lines" in data and data["lines"] is not None:
@@ -527,6 +550,8 @@ def update_invoice(
                     ).first()
                     if not item:
                         raise AppError(404, "ITEM_NOT_FOUND", "An invoice item was not found")
+
+                validate_warehouse(db, ctx, line.get("warehouse_id"))
 
                 prepared_lines.append({
                     "id": uuid.uuid4(),
@@ -616,6 +641,11 @@ def update_invoice(
                 )
 
         if set_fields:
+            paid_amt = money(Decimal(str(data.get("paid_amount", invoice["paid_total"]))))
+            final_total = params.get("grand_total", invoice["grand_total"])
+            params["payment_status"] = payment_status(paid_amt, final_total)
+            set_fields.append("payment_status = :payment_status")
+
             set_fields.append("version = version + 1")
             set_fields.append("updated_at = now()")
             sql = f"""
@@ -642,24 +672,97 @@ def update_invoice(
         )
 
         db.commit()
-        return get_invoice(db, ctx, invoice_id)
+        return get_invoice(db, ctx, invoice_id)["invoice"]
 
     except Exception:
         db.rollback()
         raise
 
 
-def cancel_invoice(
+def update_invoice_payment(db, request, ctx, invoice_id, paid_amount):
+    """Update a posted invoice's recorded balance when no payment ledger is linked."""
+    try:
+        invoice = db.execute(text("""
+            SELECT id, status, grand_total, paid_total FROM sales_invoices
+            WHERE id = :id AND company_id = :company_id FOR UPDATE
+        """), {"id": invoice_id, "company_id": ctx.company_id}).mappings().first()
+        if not invoice:
+            raise AppError(404, "INVOICE_NOT_FOUND", "Invoice not found")
+        if invoice["status"] != "posted":
+            raise AppError(409, "INVOICE_NOT_POSTED", "Only posted invoices can update payment here")
+        linked = db.execute(text("""
+            SELECT 1 FROM payment_allocations
+            WHERE sales_invoice_id = :id AND company_id = :company_id LIMIT 1
+        """), {"id": invoice_id, "company_id": ctx.company_id}).first()
+        if linked:
+            raise AppError(409, "INVOICE_HAS_ALLOCATIONS", "Reverse or record changes through the payment ledger")
+        paid = money(paid_amount)
+        status = payment_status(paid, invoice["grand_total"])
+        db.execute(text("""
+            UPDATE sales_invoices SET paid_total = :paid, payment_status = :payment_status,
+                version = version + 1, updated_at = now()
+            WHERE id = :id AND company_id = :company_id
+        """), {"paid": paid, "payment_status": status, "id": invoice_id, "company_id": ctx.company_id})
+        record_audit(db, action="invoice.payment_updated", entity_type="sales_invoice",
+                     entity_id=invoice_id, tenant_id=ctx.tenant_id, company_id=ctx.company_id,
+                     actor_user_id=ctx.user.id, request=request,
+                     before={"paid_total": str(invoice["paid_total"])},
+                     after={"paid_total": str(paid), "payment_status": status})
+        db.commit()
+        return get_invoice(db, ctx, invoice_id)["invoice"]
+    except Exception:
+        db.rollback()
+        raise
+
+
+def permanently_delete_invoice(db, request, ctx, invoice_id):
+    if not ctx.is_owner:
+        raise AppError(403, "FORBIDDEN", "Only owner can delete invoices")
+    try:
+        params = {"id": invoice_id, "company_id": ctx.company_id}
+        invoice = db.execute(text("""
+            SELECT id, invoice_number, status, paid_total FROM sales_invoices
+            WHERE id = :id AND company_id = :company_id FOR UPDATE
+        """), params).mappings().first()
+        if not invoice:
+            raise AppError(404, "INVOICE_NOT_FOUND", "Invoice not found")
+        if db.execute(text("""
+            SELECT 1 FROM payment_allocations WHERE sales_invoice_id = :id
+              AND company_id = :company_id LIMIT 1
+        """), params).first():
+            raise AppError(409, "INVOICE_HAS_ALLOCATIONS", "Remove linked payment records before deleting")
+        if db.execute(text("""
+            SELECT 1 FROM sales_returns WHERE original_invoice_id = :id
+              AND company_id = :company_id LIMIT 1
+        """), params).first():
+            raise AppError(409, "INVOICE_HAS_RETURNS", "Remove linked sales returns before deleting")
+        db.execute(text("DELETE FROM sales_invoices WHERE id = :id AND company_id = :company_id"), params)
+        record_audit(db, action="invoice.deleted", entity_type="sales_invoice",
+                     entity_id=invoice_id, tenant_id=ctx.tenant_id, company_id=ctx.company_id,
+                     actor_user_id=ctx.user.id, request=request,
+                     before={"invoice_number": invoice["invoice_number"], "status": invoice["status"],
+                             "paid_total": str(invoice["paid_total"])})
+        db.commit()
+        return {"id": invoice_id, "deleted": True}
+    except Exception:
+        db.rollback()
+        raise
+
+
+def delete_invoice(
     db: Session,
     request,
     ctx: CompanyContext,
     invoice_id: uuid.UUID,
     reason: str | None = None,
 ):
+    if not ctx.is_owner:
+        raise AppError(403, "FORBIDDEN", "Only owner can delete invoices")
+
     try:
         invoice = db.execute(
             text("""
-                SELECT id, status, version
+                SELECT id, status, paid_total
                 FROM sales_invoices
                 WHERE id = :invoice_id AND company_id = :company_id
                 FOR UPDATE
@@ -674,33 +777,14 @@ def cancel_invoice(
             raise AppError(404, "INVOICE_NOT_FOUND", "Invoice not found")
 
         if invoice["status"] == "cancelled":
-            raise AppError(409, "INVOICE_ALREADY_CANCELLED", "Invoice is already cancelled")
-
-        db.execute(
-            text("""
-                UPDATE sales_invoices
-                SET status = 'cancelled',
-                    cancelled_at = now(),
-                    cancellation_reason = :reason,
-                    version = version + 1,
-                    updated_at = now()
-                WHERE id = :invoice_id AND company_id = :company_id
-                  AND status <> 'cancelled'
-                  AND version = :version
-            """),
-            {
-                "reason": reason,
-                "invoice_id": invoice_id,
-                "company_id": ctx.company_id,
-                "version": invoice["version"],
-            },
-        )
-
-        if db.execute(
-            text("SELECT 1 FROM sales_invoices WHERE id = :id AND version = :v"),
-            {"id": invoice_id, "v": invoice["version"] + 1},
-        ).first() is None:
-            raise AppError(409, "CONFLICT", "Invoice was modified by another user")
+            raise AppError(409, "INVOICE_CANCELLED", "Invoice is already cancelled")
+        if invoice["paid_total"] > 0:
+            raise AppError(409, "INVOICE_HAS_PAYMENTS", "Reverse payments before cancelling; clear draft payments before posting")
+        db.execute(text("""
+            UPDATE sales_invoices SET status = 'cancelled', cancelled_at = now(),
+                cancellation_reason = :reason, version = version + 1, updated_at = now()
+            WHERE id = :invoice_id AND company_id = :company_id
+        """), {"invoice_id": invoice_id, "company_id": ctx.company_id, "reason": reason})
 
         record_audit(
             db,
@@ -711,12 +795,11 @@ def cancel_invoice(
             company_id=ctx.company_id,
             actor_user_id=ctx.user.id,
             request=request,
-            after={"status": "cancelled", "cancellation_reason": reason},
+            after={"status": "cancelled", "reason": reason},
         )
 
         db.commit()
-        return get_invoice(db, ctx, invoice_id)
-
+        return {"id": invoice_id, "status": "cancelled"}
     except Exception:
         db.rollback()
         raise
@@ -801,16 +884,6 @@ def list_invoices(
 
 # ---------------------------------------------------------------- print invoice
 
-def _money_str(value: Decimal) -> str:
-    return f"{value:,.2f}"
-
-
-def _date_str(value) -> str:
-    if isinstance(value, date):
-        return value.strftime("%d %b %Y")
-    return str(value)
-
-
 def print_invoice(
     db: Session,
     ctx: CompanyContext,
@@ -839,270 +912,6 @@ def print_invoice(
     if not company:
         raise AppError(404, "COMPANY_NOT_FOUND", "Company not found")
 
-    party = None
-    if invoice.get("party_id"):
-        party = db.execute(
-            text("""
-                SELECT name, gstin, email, phone
-                FROM parties
-                WHERE id = :party_id AND company_id = :company_id
-            """),
-            {"party_id": invoice["party_id"], "company_id": ctx.company_id},
-        ).mappings().first()
+    from app.modules.invoices.pdf import render_invoice_pdf
+    return render_invoice_pdf(dict(invoice), lines, dict(company))
 
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-
-    # ---- colours ----
-    INK_DARK = HexColor("#1a2332")
-    INK_MUTED = HexColor("#6b7280")
-    INK_BLUE = HexColor("#1e3a8a")
-    INK_LIGHT_BLUE = HexColor("#dbe7ff")
-    ROW_ALT = HexColor("#f3f4f6")
-    LINE_COLOR = HexColor("#e5e7eb")
-
-    margin_l = 20 * mm
-    margin_r = 20 * mm
-    y = height - 15 * mm
-
-    # ---- header: company name left, INVOICE right ----
-    c.setFont("Helvetica-Bold", 16)
-    c.setFillColor(INK_DARK)
-    c.drawString(margin_l, y, company["name"])
-
-    c.setFont("Helvetica-Bold", 24)
-    c.setFillColor(INK_BLUE)
-    c.drawRightString(width - margin_r, y, "INVOICE")
-
-    # company address lines below name
-    c.setFont("Helvetica", 9)
-    c.setFillColor(INK_MUTED)
-    addr_y = y - 5 * mm
-    address_lines = []
-    if company.get("address_line1"):
-        address_lines.append(company["address_line1"])
-    if company.get("address_line2"):
-        address_lines.append(company["address_line2"])
-    city_line = " ".join(
-        filter(None, [company.get("city"), company.get("district"), company.get("state_code"), company.get("postal_code")])
-    )
-    if city_line:
-        address_lines.append(city_line)
-    if company.get("country_code"):
-        address_lines.append(company["country_code"])
-    for line in address_lines:
-        c.drawString(margin_l, addr_y, line)
-        addr_y -= 4.5 * mm
-
-    if company.get("gstin"):
-        c.drawString(margin_l, addr_y - 2 * mm, f"GSTIN: {company['gstin']}")
-
-    y = addr_y - 10 * mm
-
-    # horizontal separator line
-    c.setStrokeColor(LINE_COLOR)
-    c.setLineWidth(0.7)
-    c.line(margin_l, y, width - margin_r, y)
-
-    # ---- invoice meta block ----
-    y -= 8 * mm
-    c.setFont("Helvetica-Bold", 9)
-    c.setFillColor(INK_DARK)
-    c.drawString(margin_l, y, "Invoice#")
-    c.drawRightString(width - margin_r, y, invoice.get("invoice_number") or "—")
-
-    y -= 6 * mm
-    c.setFont("Helvetica", 9)
-    c.setFillColor(INK_DARK)
-    c.drawString(margin_l, y, "Invoice Date")
-    c.drawRightString(width - margin_r, y, _date_str(invoice.get("invoice_date")))
-
-    y -= 6 * mm
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(margin_l, y, "Terms")
-    c.drawRightString(width - margin_r, y, invoice.get("terms") or "Due on Receipt")
-
-    y -= 6 * mm
-    c.setFont("Helvetica", 9)
-    c.drawString(margin_l, y, "Due Date")
-    c.drawRightString(width - margin_r, y, _date_str(invoice.get("due_date")))
-
-    y -= 10 * mm
-
-    # ---- Bill To / Ship To side-by-side boxes ----
-    box_w = (width - margin_l - margin_r - 10 * mm) / 2
-    box_h = 25 * mm
-
-    # Bill To box (left)
-    c.setStrokeColor(LINE_COLOR)
-    c.setLineWidth(0.7)
-    c.setFillColor(INK_LIGHT_BLUE)
-    c.roundRect(margin_l, y - box_h, box_w, box_h, 2, stroke=1, fill=1)
-
-    c.setFillColor(INK_BLUE)
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(margin_l + 4 * mm, y - 6 * mm, "Bill To")
-
-    c.setFillColor(INK_DARK)
-    c.setFont("Helvetica", 9)
-    bill_y = y - 12 * mm
-    if party:
-        c.drawString(margin_l + 4 * mm, bill_y, party.get("name") or "—")
-        bill_y -= 5 * mm
-        if party.get("gstin"):
-            c.drawString(margin_l + 4 * mm, bill_y, f"GSTIN: {party['gstin']}")
-            bill_y -= 5 * mm
-    # Use snapshot name from invoice as fallback
-    if party is None:
-        c.drawString(margin_l + 4 * mm, bill_y, invoice.get("customer_name_snapshot") or "—")
-        bill_y -= 5 * mm
-
-    # address snapshot if available
-    billing_addr = invoice.get("billing_address_snapshot") or {}
-    if isinstance(billing_addr, dict):
-        for key in ("line1", "line2", "city", "district", "state_code", "postal_code", "country_code"):
-            val = billing_addr.get(key)
-            if val:
-                c.drawString(margin_l + 4 * mm, bill_y, str(val))
-                bill_y -= 4.5 * mm
-
-    # Ship To box (right)
-    ship_x = margin_l + box_w + 10 * mm
-    c.setFillColor(INK_LIGHT_BLUE)
-    c.roundRect(ship_x, y - box_h, box_w, box_h, 2, stroke=1, fill=1)
-
-    c.setFillColor(INK_BLUE)
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(ship_x + 4 * mm, y - 6 * mm, "Ship To")
-
-    c.setFillColor(INK_DARK)
-    c.setFont("Helvetica", 9)
-    ship_y = y - 12 * mm
-    shipping_addr = invoice.get("shipping_address_snapshot") or {}
-    if isinstance(shipping_addr, dict) and shipping_addr:
-        if shipping_addr.get("name"):
-            c.drawString(ship_x + 4 * mm, ship_y, shipping_addr["name"])
-            ship_y -= 5 * mm
-        for key in ("line1", "line2", "city", "district", "state_code", "postal_code", "country_code"):
-            val = shipping_addr.get(key)
-            if val:
-                c.drawString(ship_x + 4 * mm, ship_y, str(val))
-                ship_y -= 4.5 * mm
-    else:
-        # fall back to billing address
-        if isinstance(billing_addr, dict):
-            for key in ("line1", "line2", "city", "district", "state_code", "postal_code", "country_code"):
-                val = billing_addr.get(key)
-                if val:
-                    c.drawString(ship_x + 4 * mm, ship_y, str(val))
-                    ship_y -= 4.5 * mm
-
-    y -= box_h + 12 * mm
-
-    # ---- item table ----
-    table_top = y
-    col_x_num = margin_l
-    col_x_item = margin_l + 12 * mm
-    col_x_qty = width - margin_r - 95 * mm
-    col_x_rate = width - margin_r - 65 * mm
-    col_x_amt = width - margin_r - 35 * mm
-
-    # header row
-    c.setFillColor(INK_BLUE)
-    c.rect(margin_l, table_top - 9 * mm, width - margin_l - margin_r, 9 * mm, stroke=0, fill=1)
-    c.setFillColor(white)
-    c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(col_x_num + 2 * mm, table_top - 7.5 * mm, "#")
-    c.drawString(col_x_item + 2 * mm, table_top - 7.5 * mm, "Item & Description")
-    c.drawRightString(col_x_qty + 18 * mm, table_top - 7.5 * mm, "Qty")
-    c.drawRightString(col_x_rate + 30 * mm, table_top - 7.5 * mm, "Rate")
-    c.drawRightString(col_x_amt + 30 * mm, table_top - 7.5 * mm, "Amount")
-
-    c.setStrokeColor(LINE_COLOR)
-    c.setLineWidth(0.5)
-    c.rect(margin_l, table_top - 9 * mm, width - margin_l - margin_r, 9 * mm, stroke=1, fill=0)
-
-    y = table_top - 18 * mm
-    row_h = 8 * mm
-    for idx, line in enumerate(lines, start=1):
-        if idx % 2 == 0:
-            c.setFillColor(ROW_ALT)
-            c.rect(margin_l, y - row_h, width - margin_l - margin_r, row_h, stroke=0, fill=1)
-
-        c.setFillColor(INK_DARK)
-        c.setFont("Helvetica", 8.5)
-        c.drawString(col_x_num + 2 * mm, y - 6.5 * mm, str(idx))
-
-        item_name = line.get("item_name_snapshot") or line.get("item_name") or ""
-        desc = line.get("hsn_sac_snapshot") or ""
-        c.drawString(col_x_item + 2 * mm, y - 6.5 * mm, item_name)
-        if desc:
-            c.setFont("Helvetica", 7)
-            c.setFillColor(INK_MUTED)
-            c.drawString(col_x_item + 2 * mm, y - 10.5 * mm, desc)
-
-        c.setFont("Helvetica", 8.5)
-        c.setFillColor(INK_DARK)
-        qty = line.get("quantity")
-        rate = line.get("unit_price")
-        amt = line.get("line_total")
-        c.drawRightString(col_x_qty + 18 * mm, y - 6.5 * mm, _money_str(qty) if qty is not None else "0.00")
-        c.drawRightString(col_x_rate + 30 * mm, y - 6.5 * mm, _money_str(rate) if rate is not None else "0.00")
-        c.drawRightString(col_x_amt + 30 * mm, y - 6.5 * mm, _money_str(amt) if amt is not None else "0.00")
-
-        c.setStrokeColor(LINE_COLOR)
-        c.setLineWidth(0.3)
-        c.line(margin_l, y - row_h, width - margin_r, y - row_h)
-
-        y -= row_h
-
-    # totals block
-    totals_w = 70 * mm
-    totals_x = width - margin_r - totals_w
-    totals_top = y - 6 * mm
-
-    c.setFont("Helvetica-Bold", 9)
-    c.setFillColor(INK_DARK)
-    c.drawString(totals_x, totals_top, "Sub Total")
-    c.drawRightString(width - margin_r, totals_top, _money_str(invoice.get("subtotal") or 0))
-
-    totals_top -= 7 * mm
-    c.setFont("Helvetica", 9)
-    c.drawString(totals_x, totals_top, "Tax Rate")
-    c.drawRightString(width - margin_r, totals_top, "5.00%")
-
-    totals_top -= 7 * mm
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(totals_x, totals_top, "Total")
-    c.drawRightString(width - margin_r, totals_top, _money_str(invoice.get("grand_total") or 0))
-
-    totals_top -= 7 * mm
-    c.setFont("Helvetica-Bold", 10)
-    c.setFillColor(INK_BLUE)
-    c.drawString(totals_x, totals_top, "Balance Due")
-    c.drawRightString(width - margin_r, totals_top, _money_str(invoice.get("grand_total") or 0))
-
-    y = totals_top - 14 * mm
-
-    # ---- footer ----
-    c.setFont("Helvetica-Oblique", 9)
-    c.setFillColor(INK_MUTED)
-    c.drawString(margin_l, y, "Thanks for shopping with us.")
-
-    y -= 10 * mm
-    c.setFont("Helvetica-Bold", 9)
-    c.setFillColor(INK_DARK)
-    c.drawString(margin_l, y, "Terms & Conditions")
-    y -= 6 * mm
-    c.setFont("Helvetica", 8)
-    c.setFillColor(INK_MUTED)
-    terms = invoice.get("terms") or "Full payment is due upon receipt of this invoice. Late payments may incur additional charges or interest as per the applicable laws."
-    c.drawString(margin_l, y, terms)
-
-    c.showPage()
-    c.save()
-
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-    return pdf_bytes

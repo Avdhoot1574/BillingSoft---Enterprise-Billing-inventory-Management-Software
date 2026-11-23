@@ -33,6 +33,27 @@ def setting(name: str, default: str | None = None) -> str | None:
     return os.environ.get(name) or read_dotenv().get(name) or default
 
 
+def _supabase_to_postgres_url(supabase_url: str, supabase_secret_key: str) -> str:
+    """Convert Supabase URL + secret key into a PostgreSQL connection string.
+
+    Supabase URL format: https://<project-ref>.supabase.co
+    Derived PostgreSQL URL: postgresql+psycopg://postgres.<project-ref>:<secret-key>@db.<project-ref>.supabase.co:5432/postgres
+    """
+    parsed = urlsplit(supabase_url)
+    host = parsed.hostname or ""
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[-2] == "supabase" and parts[-1] == "co":
+        project_ref = parts[0]
+        return (
+            f"postgresql+psycopg://postgres.{project_ref}:{supabase_secret_key}"
+            f"@db.{project_ref}.supabase.co:5432/postgres"
+        )
+    return (
+        f"postgresql+psycopg://postgres:{supabase_secret_key}"
+        f"@{host}:5432/postgres"
+    )
+
+
 def database_name(url: str) -> str:
     return urlsplit(url).path.lstrip("/")
 
@@ -42,7 +63,15 @@ def with_database(url: str, name: str) -> str:
 
 
 def main_url() -> str:
-    return setting("DATABASE_URL", DEFAULT_URL)
+    """Resolve the database URL: DATABASE_URL > Supabase-derived > default."""
+    explicit = setting("DATABASE_URL")
+    if explicit:
+        return explicit
+    supabase_url = setting("SUPABASE_URL")
+    supabase_secret_key = setting("SUPABASE_SECRET_KEY")
+    if supabase_url and supabase_secret_key:
+        return _supabase_to_postgres_url(supabase_url, supabase_secret_key)
+    return DEFAULT_URL
 
 
 def test_url() -> str:

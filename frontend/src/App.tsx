@@ -52,6 +52,7 @@ function AppShell() {
             <Route path="invoices" element={<Invoices />} />
             <Route path="invoices/create" element={<CreateInvoice />} />
             <Route path="invoices/:id" element={<InvoiceView />} />
+            <Route path="invoices/:id/edit" element={<CreateInvoice />} />
             <Route path="parties" element={<Parties />} />
             <Route path="items" element={<Items />} />
             <Route path="units" element={<Units />} />

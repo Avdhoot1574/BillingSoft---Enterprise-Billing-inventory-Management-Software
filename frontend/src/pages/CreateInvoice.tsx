@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import api from '@/api/index'
 import { formatMoney } from '@/lib/format'
@@ -36,9 +36,12 @@ const EMPTY_LINE: Line = {
 export default function CreateInvoice() {
   const { permissions, selectedCompany } = useAuth()
   const navigate = useNavigate()
+  const { id: invoiceId } = useParams<{ id?: string }>()
+  const [isEditMode, setIsEditMode] = useState(false)
   const [parties, setParties] = useState<any[]>([])
   const [items, setItems] = useState<any[]>([])
   const [units, setUnits] = useState<any[]>([])
+  const [taxRates, setTaxRates] = useState<any[]>([])
   const [warehouses, setWarehouses] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -58,26 +61,75 @@ export default function CreateInvoice() {
     other_charges: '0',
     notes: '',
     terms: '',
+    paid_amount: '0',
+    is_full_paid: false,
     lines: [EMPTY_LINE],
   })
 
   useEffect(() => {
     loadLookups()
+    if (invoiceId) {
+      loadInvoice(invoiceId)
+    }
   }, [])
 
   const loadLookups = async () => {
     try {
-      const [p, i, u, w] = await Promise.all([
+      const [p, i, u, w, t] = await Promise.all([
         api.get('/parties?limit=200'),
         api.get('/items?limit=200'),
         api.get('/units?limit=200'),
         api.get('/warehouses?limit=200'),
+        api.get('/tax-rates?limit=200'),
       ])
       setParties(p.data as any[])
       setItems(i.data as any[])
       setUnits(u.data as any[])
       setWarehouses(w.data as any[])
-    } catch {}
+      setTaxRates(t.data as any[])
+    } catch { setError("Some customer or item lookups could not be loaded. Please retry.") }
+  }
+
+  const loadInvoice = async (invoiceId: string) => {
+    setLoading(true)
+    try {
+      const res = await api.get(`/invoices/${invoiceId}`)
+      const inv = res.data as any
+      setIsEditMode(true)
+      setForm({
+        party_id: inv.party_id ?? '',
+        invoice_date: inv.invoice_date ?? '',
+        due_date: inv.due_date ?? '',
+        place_of_supply_state_code: inv.place_of_supply_state_code ?? '',
+        supply_type: inv.supply_type ?? 'intra_state',
+        customer_name: inv.customer_name_snapshot ?? '',
+        customer_gstin: inv.customer_gstin_snapshot ?? '',
+        billing_address: inv.billing_address_snapshot ?? {},
+        shipping_address: inv.shipping_address_snapshot ?? {},
+        other_charges: String(inv.other_charges ?? 0),
+        notes: inv.notes ?? '',
+        terms: inv.terms ?? '',
+        paid_amount: String(inv.paid_total ?? 0),
+        is_full_paid: inv.payment_status === 'paid',
+        lines: (inv.lines ?? []).map((line: any) => ({
+          id: line.id ?? crypto.randomUUID(),
+          item_id: line.item_id ?? null,
+          item_name: line.item_name_snapshot ?? line.item_name,
+          sku: line.sku_snapshot ?? '',
+          hsn_sac: line.hsn_sac_snapshot ?? '',
+          unit_name: line.unit_name_snapshot ?? 'Nos',
+          quantity: String(line.quantity ?? 1),
+          unit_price: String(line.unit_price ?? 0),
+          discount_percent: String(line.discount_percent ?? 0),
+          tax_rate_percent: String(line.tax_rate_percent ?? 0),
+          warehouse_id: line.warehouse_id ?? null,
+        })),
+      })
+    } catch (e: any) {
+      setError(e.message || 'Failed to load invoice for editing')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const addLine = () => {
@@ -103,15 +155,16 @@ export default function CreateInvoice() {
       item_name: item.name,
       sku: item.sku ?? '',
       hsn_sac: item.hsn_sac ?? '',
-      tax_rate_percent: String(item.tax_rate?.rate_percent ?? 0),
+      tax_rate_percent: String(item.tax_rate?.rate_percent ?? taxRates.find((t) => t.id === item.tax_rate_id)?.rate_percent ?? 0),
       unit_price: String(item.sale_price ?? 0),
-      unit_name: item.unit?.abbreviation ?? 'Nos',
+      unit_name: item.unit?.abbreviation ?? units.find((u) => u.id === item.unit_id)?.abbreviation ?? 'Nos',
     }
     setForm({ ...form, lines })
   }
 
   const selectParty = (partyId: string) => {
     const party = parties.find((p) => p.id === partyId)
+    setForm((prev) => ({ ...prev, party_id: partyId }))
     if (!party) return
 
     // Auto-fill customer name and GSTIN from party
@@ -153,24 +206,30 @@ export default function CreateInvoice() {
     }))
   }
 
+  const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
+
   const lineTotal = (l: Line) => {
     const qty = Number(l.quantity) || 0
     const price = Number(l.unit_price) || 0
     const disc = Number(l.discount_percent) || 0
-    return qty * price * (1 - disc / 100)
+    const gross = roundMoney(qty * price)
+    return roundMoney(gross - roundMoney(gross * disc / 100))
   }
 
   const taxAmount = (l: Line) => {
     const base = lineTotal(l)
     const rate = Number(l.tax_rate_percent) || 0
-    return base * (rate / 100)
+    return roundMoney(base * (rate / 100))
   }
 
-  const subtotal = form.lines.reduce((s, l) => s + lineTotal(l), 0)
-  const discountTotal = form.lines.reduce((s, l) => s + (lineTotal(l) * (Number(l.discount_percent) / 100)), 0)
+  const subtotal = form.lines.reduce((s, l) => s + roundMoney(Number(l.quantity) * Number(l.unit_price)), 0)
+  const discountTotal = form.lines.reduce((s, l) => s + roundMoney(roundMoney(Number(l.quantity) * Number(l.unit_price)) * Number(l.discount_percent) / 100), 0)
   const taxTotal = form.lines.reduce((s, l) => s + taxAmount(l), 0)
   const otherCharges = Number(form.other_charges) || 0
-  const grandTotal = subtotal - discountTotal + taxTotal + otherCharges
+  const grandTotal = roundMoney(subtotal - discountTotal + taxTotal + otherCharges)
+  const paidAmount = form.is_full_paid ? grandTotal : Number(form.paid_amount) || 0
+  const balance = grandTotal - paidAmount
+  const paymentStatus = paidAmount >= grandTotal ? 'paid' : paidAmount > 0 ? 'partially_paid' : 'unpaid'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -226,6 +285,7 @@ export default function CreateInvoice() {
         other_charges: otherCharges,
         notes: form.notes || null,
         terms: form.terms || null,
+        paid_amount: paidAmount,
         lines: form.lines.map((l) => ({
           item_id: l.item_id || null,
           item_name: l.item_name,
@@ -248,7 +308,7 @@ export default function CreateInvoice() {
     } catch (err: any) {
       // Show detailed validation errors from 422 response
       const details = err.details ?? err.response?.data?.error?.details
-      if (details) {
+      if (Array.isArray(details)) {
         const msgs = details.map((d: any) => {
           const loc = d.loc?.join('.') || 'field'
           return `${loc}: ${d.msg}`
@@ -261,18 +321,106 @@ export default function CreateInvoice() {
     }
   }
 
+  const handleSubmitEdit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setSaving(true)
+    try {
+      if (!invoiceId) return
+      if (!form.customer_name) {
+        setError('Customer name is required')
+        setSaving(false)
+        return
+      }
+      for (const l of form.lines) {
+        if (!l.item_name?.trim()) {
+          setError(`Line ${form.lines.indexOf(l) + 1}: Item name is required`)
+          setSaving(false)
+          return
+        }
+        if (!l.unit_name?.trim()) {
+          setError(`Line ${form.lines.indexOf(l) + 1}: Unit is required`)
+          setSaving(false)
+          return
+        }
+        if ((Number(l.quantity) || 0) <= 0) {
+          setError(`Line ${form.lines.indexOf(l) + 1}: Quantity must be greater than 0`)
+          setSaving(false)
+          return
+        }
+        const disc = Number(l.discount_percent) || 0
+        const tax = Number(l.tax_rate_percent) || 0
+        if (disc < 0 || disc > 100) {
+          setError(`Line ${form.lines.indexOf(l) + 1}: Discount % must be between 0 and 100`)
+          setSaving(false)
+          return
+        }
+        if (tax < 0 || tax > 100) {
+          setError(`Line ${form.lines.indexOf(l) + 1}: Tax % must be between 0 and 100`)
+          setSaving(false)
+          return
+        }
+      }
+
+      const payload = {
+        party_id: form.party_id || null,
+        invoice_date: form.invoice_date,
+        due_date: form.due_date || null,
+        place_of_supply_state_code: form.place_of_supply_state_code || null,
+        supply_type: form.supply_type,
+        customer_name: form.customer_name,
+        customer_gstin: form.customer_gstin || null,
+        billing_address: form.billing_address,
+        shipping_address: form.shipping_address,
+        other_charges: otherCharges,
+        notes: form.notes || null,
+        terms: form.terms || null,
+        paid_amount: paidAmount,
+        lines: form.lines.map((l) => ({
+          item_id: l.item_id || null,
+          item_name: l.item_name,
+          sku: l.sku || null,
+          hsn_sac: l.hsn_sac || null,
+          unit_name: l.unit_name,
+          quantity: Number(l.quantity) || 0,
+          unit_price: Number(l.unit_price) || 0,
+          discount_percent: Number(l.discount_percent) || 0,
+          tax_rate_percent: Number(l.tax_rate_percent) || 0,
+          warehouse_id: l.warehouse_id || null,
+        })),
+      }
+      const res = await api.patch(`/invoices/${invoiceId}`, payload)
+      const inv = res.data as any
+      setSuccess('Invoice updated successfully')
+      setSaving(false)
+      setTimeout(() => navigate(`/invoices/${inv.id ?? inv.invoice?.id}`), 800)
+    } catch (err: any) {
+      const details = err.details ?? err.response?.data?.error?.details
+      if (Array.isArray(details)) {
+        const msgs = details.map((d: any) => {
+          const loc = d.loc?.join('.') || 'field'
+          return `${loc}: ${d.msg}`
+        })
+        setError('Validation failed: ' + msgs.join('; '))
+      } else {
+        setError(err.message || 'Failed to update invoice')
+      }
+      setSaving(false)
+    }
+  }
+
   const canPost = permissions.includes('sales.invoice.post')
 
   return (
     <div className="p-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Create Sales Invoice</h1>
-          <p className="text-gray-500">Select a party to auto-fill customer details, then add line items.</p>
+          <h1 className="text-2xl font-bold text-gray-900">{isEditMode ? 'Edit Sales Invoice' : 'Create Sales Invoice'}</h1>
+          <p className="text-gray-500">{isEditMode ? 'Modify invoice details below.' : 'Select a party to auto-fill customer details, then add line items.'}</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => navigate('/invoices')} className="btn-secondary">Back to list</button>
-          <button onClick={handleSubmit} className="btn-primary" disabled={saving}>
+          <button onClick={isEditMode ? handleSubmitEdit : handleSubmit} className="btn-primary" disabled={saving || loading}>
             {saving ? <Loader2 className="w-4 h-4 mr-2" /> : <Save className="w-4 h-4 mr-2" />} Save Invoice
           </button>
         </div>
@@ -282,7 +430,7 @@ export default function CreateInvoice() {
       {success && <div className="mb-4 rounded-md bg-green-50 p-3 text-sm text-green-700 border border-green-100">{success}</div>}
 
       <div className="card">
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={(e) => (isEditMode ? handleSubmitEdit(e) : handleSubmit(e))} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="label">Customer / Party</label>
@@ -455,31 +603,59 @@ export default function CreateInvoice() {
             </div>
           </div>
 
-          <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
-              <div>
-                <p className="text-gray-500 text-xs">Subtotal</p>
-                <p className="font-medium">{formatMoney(subtotal)}</p>
-              </div>
-              <div>
-                <p className="text-gray-500 text-xs">Discount</p>
-                <p className="font-medium text-gray-600">-{formatMoney(discountTotal)}</p>
-              </div>
-              <div>
-                <p className="text-gray-500 text-xs">Tax</p>
-                <p className="font-medium">{formatMoney(taxTotal)}</p>
-              </div>
-              <div>
-                <p className="text-gray-500 text-xs">Grand total</p>
-                <p className="font-bold text-brand-700">{formatMoney(grandTotal)}</p>
+            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-500 text-xs">Subtotal</p>
+                  <p className="font-medium">{formatMoney(subtotal)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Discount</p>
+                  <p className="font-medium text-gray-600">-{formatMoney(discountTotal)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Tax</p>
+                  <p className="font-medium">{formatMoney(taxTotal)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs">Grand total</p>
+                  <p className="font-bold text-brand-700">{formatMoney(grandTotal)}</p>
+                </div>
               </div>
             </div>
-          </div>
+
+            {/* Payment tracking section */}
+            <div className="border-t pt-4">
+              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">Payment</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="label">Paid amount</label>
+                  <input className="input" type="number" step="0.01" value={form.is_full_paid ? String(grandTotal) : form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: e.target.value, is_full_paid: false })} />
+                </div>
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" checked={form.is_full_paid} onChange={(e) => {
+                    if (e.target.checked) {
+                      setForm({ ...form, paid_amount: String(grandTotal), is_full_paid: true })
+                    } else {
+                      setForm({ ...form, paid_amount: '0', is_full_paid: false })
+                    }
+                  }} />
+                  <label className="text-sm text-slate-600 cursor-pointer">Full paid</label>
+                </div>
+              </div>
+              <div className="flex items-baseline gap-2 mt-3">
+                <span className="text-sm font-semibold text-slate-700">Balance:</span>
+                <span className={`text-lg font-bold ${balance >= grandTotal ? 'text-green-600' : balance > 0 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {formatMoney(balance)}
+                </span>
+                <span className="text-xs text-slate-500 uppercase">{paymentStatus}</span>
+              </div>
+            </div>
 
           <div className="flex justify-end gap-2 pt-4">
             <button type="button" onClick={() => navigate('/invoices')} className="btn-secondary">Cancel</button>
             <button type="submit" className="btn-primary" disabled={saving || !form.customer_name}>
-              {saving ? <Loader2 className="w-4 h-4 mr-2" /> : <Save className="w-4 h-4 mr-2" />} Save Invoice
+              {saving ? <Loader2 className="w-4 h-4 mr-2" /> : <Save className="w-4 h-4 mr-2" />} {isEditMode ? 'Update Invoice' : 'Save Invoice'}
             </button>
           </div>
         </form>
@@ -501,5 +677,7 @@ type InvoiceForm = {
   other_charges: string
   notes: string
   terms: string
+  paid_amount: string
+  is_full_paid: boolean
   lines: Line[]
 }

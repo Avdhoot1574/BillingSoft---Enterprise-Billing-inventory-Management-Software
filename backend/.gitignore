@@ -20,3 +20,7 @@ build/
 *.zip
 *.bak
 *.tmp
+*.rar
+node_modules/
+package-lock.json
+

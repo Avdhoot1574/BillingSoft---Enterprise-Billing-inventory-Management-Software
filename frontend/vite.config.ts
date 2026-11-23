@@ -7,6 +7,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   plugins: [react()],
+  // Rebuild prebundled dependencies on startup after folder moves or cache corruption.
+  optimizeDeps: {
+    force: true,
+  },
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),
@@ -14,11 +18,5 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      '/api': {
-        target: 'https://backend-4095dc28.fastapicloud.dev',
-        changeOrigin: true,
-      },
-    },
   },
 })

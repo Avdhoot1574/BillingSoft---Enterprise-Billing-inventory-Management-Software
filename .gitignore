@@ -38,10 +38,8 @@ __pycache__/
 *.so
 .Python
 env/
-frontend/
 venv/
-.venv/
-env/
+.env/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
@@ -88,3 +86,8 @@ build/
 # Debug / test scripts (temporary - review before committing)
 debug-*.ps1
 test-*.ps1
+
+# Misc artifacts
+backup.dump
+tmp/
+

@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
@@ -9,10 +10,13 @@ from app.api.v1.invoice_schemas import (
     InvoiceCancel,
     InvoiceCreate,
     InvoiceOut,
+    InvoiceDetailOut,
     InvoicePost,
+    InvoicePaymentUpdate,
     InvoiceUpdate,
 )
 from app.core.context import CompanyContext
+from app.core.errors import AppError
 from app.db.session import get_db
 from app.modules.invoices import service
 
@@ -21,7 +25,7 @@ router = APIRouter(prefix="/invoices", tags=["sales invoices"])
 
 @router.get("")
 def get_invoices(
-    status: str | None = None,
+    status: Literal["draft", "posted", "cancelled"] | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     ctx: CompanyContext = Depends(require_permission("sales.invoice.read")),
@@ -73,15 +77,39 @@ def post_invoice(
     return service.post_invoice(db, request, ctx, invoice_id)
 
 
-@router.post("/{invoice_id}/cancel", response_model=InvoiceOut)
-def cancel_invoice(
+@router.patch("/{invoice_id}/payment", response_model=InvoiceOut)
+def update_invoice_payment(
+    invoice_id: uuid.UUID,
+    body: InvoicePaymentUpdate,
+    request: Request,
+    ctx: CompanyContext = Depends(require_permission("sales.invoice.create")),
+    db: Session = Depends(get_db),
+):
+    return service.update_invoice_payment(db, request, ctx, invoice_id, body.paid_amount)
+
+
+@router.delete("/{invoice_id}")
+def permanently_delete_invoice(
+    invoice_id: uuid.UUID,
+    request: Request,
+    ctx: CompanyContext = Depends(require_permission("sales.invoice.cancel")),
+    db: Session = Depends(get_db),
+):
+    return service.permanently_delete_invoice(db, request, ctx, invoice_id)
+
+
+@router.post("/{invoice_id}/cancel")
+@router.delete("/{invoice_id}/cancel", deprecated=True)
+def delete_invoice(
     invoice_id: uuid.UUID,
     body: InvoiceCancel,
     request: Request,
     ctx: CompanyContext = Depends(require_permission("sales.invoice.cancel")),
     db: Session = Depends(get_db),
 ):
-    return service.cancel_invoice(db, request, ctx, invoice_id, reason=body.reason)
+    if not ctx.is_owner:
+        raise AppError(403, "FORBIDDEN", "Only owner can delete invoices")
+    return service.delete_invoice(db, request, ctx, invoice_id, reason=body.reason)
 
 
 @router.get("/{invoice_id}/print")
@@ -100,11 +128,11 @@ def print_invoice(
     )
 
 
-@router.get("/{invoice_id}", response_model=InvoiceOut)
+@router.get("/{invoice_id}", response_model=InvoiceDetailOut)
 def get_invoice(
     invoice_id: uuid.UUID,
     ctx: CompanyContext = Depends(require_permission("sales.invoice.read")),
     db: Session = Depends(get_db),
 ):
     result = service.get_invoice(db, ctx, invoice_id)
-    return result["invoice"]
+    return {**result["invoice"], "lines": result["lines"]}

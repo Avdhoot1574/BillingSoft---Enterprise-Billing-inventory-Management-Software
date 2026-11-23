@@ -5,17 +5,34 @@ import api from '@/api/index'
 import { formatMoney, formatDate } from '@/lib/format'
 import { FileText, Loader2, ArrowLeft, Mail, Users, Save, RefreshCcw } from 'lucide-react'
 
+function formatAddress(addr: any): string {
+  if (!addr || typeof addr !== 'object') return ''
+  const parts: string[] = []
+  if (addr.line1) parts.push(addr.line1)
+  if (addr.line2) parts.push(addr.line2)
+  const cityLine = [addr.city, addr.district, addr.state_code, addr.postal_code]
+    .filter(Boolean)
+    .join(', ')
+  if (cityLine) parts.push(cityLine)
+  if (addr.country_code) parts.push(addr.country_code.toUpperCase())
+  return parts.join('\n')
+}
+
 export default function InvoiceView() {
   const { id } = useParams<{ id: string }>()
-  const { permissions } = useAuth()
+  const { permissions, isOwner, selectedCompany } = useAuth()
   const navigate = useNavigate()
   const [invoice, setInvoice] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [printing, setPrinting] = useState(false)
+  const [paymentEditing, setPaymentEditing] = useState(false)
+  const [paidAmount, setPaidAmount] = useState('')
+  const [savingPayment, setSavingPayment] = useState(false)
 
   const canPost = permissions.includes('sales.invoice.post')
-  const canCancel = permissions.includes('sales.invoice.cancel')
+  const canEdit = permissions.includes('sales.invoice.create')
+  const canDelete = isOwner && permissions.includes('sales.invoice.cancel')
 
   useEffect(() => {
     if (!id) return
@@ -65,14 +82,33 @@ export default function InvoiceView() {
     }
   }
 
-  const cancelInvoice = async () => {
-    const reason = window.prompt('Cancellation reason (optional):')
-    if (reason === null) return
+  const deleteInvoice = async () => {
+    if (!window.confirm('Permanently delete this invoice? This cannot be undone.')) return
     try {
-      await api.post(`/invoices/${id}/cancel`, { reason: reason || undefined })
-      load()
+      await api.delete(`/invoices/${id}`)
+      navigate('/invoices')
     } catch (e: any) {
-      setError(e.message || 'Failed to cancel invoice')
+      setError(e.message || 'Failed to delete invoice')
+    }
+  }
+
+  const savePayment = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const amount = Number(paidAmount)
+    if (!Number.isFinite(amount) || amount < 0 || amount > Number(invoice.grand_total)) {
+      setError('Paid amount must be between zero and the invoice total')
+      return
+    }
+    setSavingPayment(true)
+    setError('')
+    try {
+      await api.patch(`/invoices/${id}/payment`, { paid_amount: paidAmount })
+      setPaymentEditing(false)
+      await load()
+    } catch (e: any) {
+      setError(e.message || 'Failed to update payment')
+    } finally {
+      setSavingPayment(false)
     }
   }
 
@@ -121,15 +157,33 @@ export default function InvoiceView() {
             {printing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />} Download PDF
           </button>
           {invoice.status === 'draft' && canPost && (
-            <button onClick={postInvoice} className="btn-outline">Post</button>
+            <button onClick={postInvoice} className="btn-outline">Post invoice</button>
           )}
-          {invoice.status === 'posted' && canCancel && (
-            <button onClick={cancelInvoice} className="btn-danger">Cancel</button>
+          {invoice.status === 'draft' && canEdit && (
+            <button onClick={() => navigate(`/invoices/${id}/edit`)} className="btn-secondary">Edit</button>
+          )}
+          {invoice.status === 'posted' && canEdit && (
+            <button onClick={() => { setPaidAmount(String(invoice.paid_total)); setPaymentEditing(true) }} className="btn-secondary">Edit payment</button>
+          )}
+          {canDelete && (
+            <button onClick={deleteInvoice} className="btn-danger">Delete invoice</button>
           )}
         </div>
       </div>
 
       {error && <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700 border border-red-100">{error}</div>}
+      {paymentEditing && (
+        <form onSubmit={savePayment} className="card mb-6 max-w-md space-y-3">
+          <label htmlFor="invoice-paid-amount" className="label">Total amount received</label>
+          <input id="invoice-paid-amount" className="input" type="number" min="0" max={invoice.grand_total} step="0.01"
+            value={paidAmount} onChange={(e) => setPaidAmount(e.target.value)} required />
+          <p className="text-sm text-gray-500">Enter the total received so far. The remaining balance and status update automatically.</p>
+          <div className="flex gap-2">
+            <button type="submit" disabled={savingPayment} className="btn-primary">{savingPayment ? 'Saving...' : 'Save payment'}</button>
+            <button type="button" onClick={() => setPaymentEditing(false)} className="btn-secondary">Close</button>
+          </div>
+        </form>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
@@ -149,16 +203,16 @@ export default function InvoiceView() {
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">Bill to</h3>
                 <p className="text-gray-700">{invoice.customer_name_snapshot}</p>
-                {invoice.customer_gstin && <p className="text-sm text-gray-500">GSTIN: {invoice.customer_gstin}</p>}
+                {invoice.customer_gstin_snapshot && <p className="text-sm text-gray-500">GSTIN: {invoice.customer_gstin_snapshot}</p>}
                 {invoice.billing_address_snapshot && Object.keys(invoice.billing_address_snapshot).length > 0 && (
-                  <p className="text-sm text-gray-500">{JSON.stringify(invoice.billing_address_snapshot)}</p>
+                  <p className="text-sm text-gray-500 whitespace-pre-line">{formatAddress(invoice.billing_address_snapshot)}</p>
                 )}
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">Ship to</h3>
                 <p className="text-gray-700">{invoice.customer_name_snapshot}</p>
                 {invoice.shipping_address_snapshot && Object.keys(invoice.shipping_address_snapshot).length > 0 && (
-                  <p className="text-sm text-gray-500">{JSON.stringify(invoice.shipping_address_snapshot)}</p>
+                  <p className="text-sm text-gray-500 whitespace-pre-line">{formatAddress(invoice.shipping_address_snapshot)}</p>
                 )}
               </div>
             </div>
@@ -269,7 +323,7 @@ export default function InvoiceView() {
   )
 
   function selectedCompanyName(): string {
-    return 'My Company'
+    return selectedCompany?.name ?? 'My Company'
   }
 }
 
