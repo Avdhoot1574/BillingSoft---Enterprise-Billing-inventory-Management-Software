@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { ShieldCheck, Mail, Lock, ArrowRight, Zap, Boxes, Cloud, Check, LayoutDashboard, FileText, Users, BarChart3, Settings } from 'lucide-react'
+import { ShieldCheck, Mail, Lock, Eye, EyeOff, ArrowRight, Zap, Boxes, Cloud, Check, LayoutDashboard, FileText, Users, BarChart3, Settings } from 'lucide-react'
 import './Login.css'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
@@ -69,9 +70,13 @@ export default function Login() {
               <label htmlFor="login-password">Password</label>
               <div className="login-input-wrap">
                 <Lock aria-hidden="true" />
-                <input id="login-password" name="password" type="password" autoComplete="current-password"
+                <input id="login-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" className="password-input"
                   placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" value={password}
                   onChange={(e) => setPassword(e.target.value)} required />
+                <button type="button" className="password-toggle" onClick={() => setShowPassword((shown) => !shown)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
+                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </button>
               </div>
             </div>
             {error && <div className="login-error" role="alert">{error}</div>}

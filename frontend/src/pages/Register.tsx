@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { ShieldCheck, User, Mail, Phone, Lock, ArrowRight, Zap, Boxes, Cloud, FileText, CheckCircle2 } from 'lucide-react'
+import { ShieldCheck, User, Mail, Phone, Lock, Eye, EyeOff, ArrowRight, Zap, Boxes, Cloud, FileText, CheckCircle2 } from 'lucide-react'
 import './Login.css'
 import './Register.css'
 
 export default function Register() {
   const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '' })
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { register } = useAuth()
@@ -88,9 +89,13 @@ export default function Register() {
               <label htmlFor="register-password">Password</label>
               <div className="login-input-wrap">
                 <Lock aria-hidden="true" />
-                <input id="register-password" name="password" type="password" autoComplete="new-password"
+                <input id="register-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" className="password-input"
                   placeholder="••••••••••" value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={10} />
+                <button type="button" className="password-toggle" onClick={() => setShowPassword((shown) => !shown)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
+                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </button>
               </div>
               <p className="register-password-hint">At least 10 characters</p>
             </div>
