@@ -108,6 +108,7 @@ def list_records(
     *,
     search: str | None = None,
     include_inactive: bool = False,
+    archived_only: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
@@ -120,7 +121,7 @@ def list_records(
     }
 
     if resource == "items":
-        conditions.append("is_archived = false")
+        conditions.append("is_archived = true" if archived_only else "is_archived = false")
     elif resource in {"tax_rates", "warehouses"} and not include_inactive:
         conditions.append("is_active = true")
 
@@ -253,25 +254,44 @@ def archive_item(
     ctx: CompanyContext,
     item_id: uuid.UUID,
 ) -> dict:
+    return _set_item_archived(db, request, ctx, item_id, True)
+
+
+def restore_item(
+    db: Session,
+    request: Request,
+    ctx: CompanyContext,
+    item_id: uuid.UUID,
+) -> dict:
+    return _set_item_archived(db, request, ctx, item_id, False)
+
+
+def _set_item_archived(
+    db: Session,
+    request: Request,
+    ctx: CompanyContext,
+    item_id: uuid.UUID,
+    archived: bool,
+) -> dict:
     before = _get_one(db, ctx, "items", item_id)
 
-    if before["is_archived"]:
+    if before["is_archived"] == archived:
         return before
 
     row = db.execute(
         text(
             """UPDATE items
-               SET is_archived = true, updated_at = now()
+               SET is_archived = :archived, updated_at = now()
                WHERE company_id = :company_id AND id = :id
                RETURNING *"""
         ),
-        {"company_id": ctx.company_id, "id": item_id},
+        {"company_id": ctx.company_id, "id": item_id, "archived": archived},
     ).mappings().one()
 
     result = dict(row)
     record_audit(
         db,
-        action="items.archive",
+        action="items.archive" if archived else "items.restore",
         entity_type="item",
         entity_id=item_id,
         tenant_id=ctx.tenant_id,

@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import api, { Party } from '@/api/index'
 import { formatMoney, formatDate } from '@/lib/format'
 import Modal from '@/components/common/Modal'
-import { Plus, Search, Edit2, Save, Loader2, Archive, User as UserIcon } from 'lucide-react'
+import { Plus, Search, Save, Loader2 } from 'lucide-react'
 
 type PartyKind = 'customer' | 'supplier' | 'both'
 
@@ -13,10 +12,10 @@ const KIND_COLOR: Record<PartyKind, string> = { customer: 'bg-blue-100 text-blue
 
 export default function Parties() {
   const { permissions } = useAuth()
-  const navigate = useNavigate()
   const [items, setItems] = useState<Party[]>([])
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState<PartyKind | ''>('')
+  const [archivedOnly, setArchivedOnly] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [open, setOpen] = useState(false)
@@ -37,12 +36,12 @@ export default function Parties() {
 
   useEffect(() => {
     load()
-  }, [search, kind])
+  }, [search, kind, archivedOnly])
 
   const load = async () => {
     setLoading(true)
     try {
-      const res = await api.get('/parties', { params: { search: search || undefined, kind: kind || undefined, limit: 100 } })
+      const res = await api.get('/parties', { params: { search: search || undefined, kind: kind || undefined, archived_only: archivedOnly, limit: 100 } })
       setItems(res.data as Party[])
     } catch (e: any) {
       setError(e.message || 'Failed to load parties')
@@ -146,6 +145,16 @@ export default function Parties() {
     }
   }
 
+  const restore = async (id: string) => {
+    try {
+      setError('')
+      await api.post(`/parties/${id}/restore`)
+      await load()
+    } catch (e: any) {
+      setError(e.message || 'Restore failed')
+    }
+  }
+
   const addAddress = () => {
     setForm({ ...form, addresses: [...form.addresses, { address_type: 'billing', line1: '', line2: '', city: '', district: '', state_code: '', state_name: '', postal_code: '', country_code: 'IN', is_default: false }] })
   }
@@ -157,13 +166,17 @@ export default function Parties() {
           <h1 className="text-2xl font-bold text-gray-900">Parties</h1>
           <p className="text-gray-500">Customers and suppliers.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <select value={kind} onChange={(e) => setKind(e.target.value as PartyKind)} className="input text-xs border border-gray-300 rounded px-2 py-1.5">
             <option value="">All kinds</option>
             <option value="customer">Customer</option>
             <option value="supplier">Supplier</option>
             <option value="both">Both</option>
           </select>
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+            <button type="button" onClick={() => setArchivedOnly(false)} className={`px-3 py-1.5 ${!archivedOnly ? 'bg-brand-50 text-brand-700 font-semibold' : 'text-gray-600'}`}>Active</button>
+            <button type="button" onClick={() => setArchivedOnly(true)} className={`px-3 py-1.5 ${archivedOnly ? 'bg-brand-50 text-brand-700 font-semibold' : 'text-gray-600'}`}>Archived</button>
+          </div>
           {canCreate && (
             <button onClick={openCreate} className="btn-primary flex items-center gap-2">
               <Plus className="w-4 h-4" /> Add Party
@@ -171,6 +184,8 @@ export default function Parties() {
           )}
         </div>
       </div>
+
+      {error && !open && <div className="mb-3 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</div>}
 
       <div className="relative">
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -201,7 +216,7 @@ export default function Parties() {
               {loading ? (
                 <tr><td colSpan={6} className="p-4 text-center"><Loader2 className="w-5 h-5 animate-spin" /> Loading...</td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={6} className="p-4 text-center text-gray-400">No parties found.</td></tr>
+                <tr><td colSpan={6} className="p-4 text-center text-gray-400">No {archivedOnly ? 'archived ' : ''}parties found.</td></tr>
               ) : (
                 items.map((p) => (
                   <tr key={p.id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -211,11 +226,14 @@ export default function Parties() {
                     <td className="text-right text-gray-600 text-sm">{p.phone ?? '—'}</td>
                     <td className="text-right font-medium">{formatMoney(p.opening_balance)}</td>
                     <td className="text-right">
-                      {canUpdate && (
-                        <button onClick={() => { openEdit(p); navigate(0) }} className="text-brand-600 hover:underline text-sm mr-3">Edit</button>
+                      {canUpdate && !p.is_archived && (
+                        <button onClick={() => openEdit(p)} className="text-brand-600 hover:underline text-sm mr-3">Edit</button>
                       )}
                       {canArchive && !p.is_archived && (
                         <button onClick={() => archive(p.id)} className="text-red-600 hover:underline text-sm">Archive</button>
+                      )}
+                      {canArchive && p.is_archived && (
+                        <button onClick={() => restore(p.id)} className="text-brand-600 hover:underline text-sm">Restore</button>
                       )}
                     </td>
                   </tr>

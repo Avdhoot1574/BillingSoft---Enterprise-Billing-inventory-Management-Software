@@ -121,6 +121,7 @@ def list_parties(
     search: str | None,
     kind: str | None,
     include_archived: bool,
+    archived_only: bool = False,
     limit: int,
     offset: int,
 ) -> list[dict]:
@@ -129,7 +130,8 @@ def list_parties(
             SELECT p.*
             FROM parties p
             WHERE p.company_id = :company_id
-              AND (:include_archived OR p.is_archived = FALSE)
+              AND (CASE WHEN :archived_only THEN p.is_archived = TRUE
+                        ELSE (:include_archived OR p.is_archived = FALSE) END)
               AND (CAST(:kind AS text) IS NULL OR p.kind::text = :kind)
               AND (
                     CAST(:search AS text) IS NULL
@@ -145,6 +147,7 @@ def list_parties(
         {
             "company_id": ctx.company_id,
             "include_archived": include_archived,
+            "archived_only": archived_only,
             "kind": kind,
             "search": search.strip() if search and search.strip() else None,
             "limit": limit,
@@ -316,24 +319,43 @@ def archive_party(
     ctx: CompanyContext,
     party_id: uuid.UUID,
 ) -> dict:
+    return _set_party_archived(db, request, ctx, party_id, True)
+
+
+def restore_party(
+    db: Session,
+    request: Request,
+    ctx: CompanyContext,
+    party_id: uuid.UUID,
+) -> dict:
+    return _set_party_archived(db, request, ctx, party_id, False)
+
+
+def _set_party_archived(
+    db: Session,
+    request: Request,
+    ctx: CompanyContext,
+    party_id: uuid.UUID,
+    archived: bool,
+) -> dict:
     try:
         current = _party_or_404(db, ctx.company_id, party_id)
-        if current["is_archived"]:
+        if current["is_archived"] == archived:
             return _party_detail(db, ctx.company_id, party_id)
 
         db.execute(
             text("""
                 UPDATE parties
-                SET is_archived = TRUE, updated_at = now()
+                SET is_archived = :archived, updated_at = now()
                 WHERE id = :party_id AND company_id = :company_id
             """),
-            {"party_id": party_id, "company_id": ctx.company_id},
+            {"party_id": party_id, "company_id": ctx.company_id, "archived": archived},
         )
         updated = _party_or_404(db, ctx.company_id, party_id)
 
         record_audit(
             db,
-            action="party.archived",
+            action="party.archived" if archived else "party.restored",
             entity_type="party",
             entity_id=party_id,
             tenant_id=ctx.tenant_id,

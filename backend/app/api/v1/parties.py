@@ -19,6 +19,7 @@ def list_parties(
     search: str | None = Query(default=None, max_length=200),
     kind: Literal["customer", "supplier", "both"] | None = None,
     include_archived: bool = False,
+    archived_only: bool = False,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     ctx: CompanyContext = Depends(require_permission("parties.read")),
@@ -30,6 +31,7 @@ def list_parties(
         search=search,
         kind=kind,
         include_archived=include_archived,
+        archived_only=archived_only,
         limit=limit,
         offset=offset,
     )
@@ -84,3 +86,13 @@ def archive_party(
     db: Session = Depends(get_db),
 ):
     return service.archive_party(db, request, ctx, party_id)
+
+
+@router.post("/{party_id}/restore", response_model=PartyOut)
+def restore_party(
+    party_id: uuid.UUID,
+    request: Request,
+    ctx: CompanyContext = Depends(require_permission("parties.archive")),
+    db: Session = Depends(get_db),
+):
+    return service.restore_party(db, request, ctx, party_id)

@@ -157,13 +157,14 @@ def update_tax_rate(
 @router.get("/items")
 def get_items(
     search: str | None = None,
+    archived_only: bool = False,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     ctx: CompanyContext = Depends(require_permission("items.read")),
     db: Session = Depends(get_db),
 ):
     return service.list_records(
-        db, ctx, "items", search=search, limit=limit, offset=offset
+        db, ctx, "items", search=search, archived_only=archived_only, limit=limit, offset=offset
     )
 
 
@@ -214,6 +215,16 @@ def archive_item(
     db: Session = Depends(get_db),
 ):
     return service.archive_item(db, request, ctx, item_id)
+
+
+@router.post("/items/{item_id}/restore")
+def restore_item(
+    item_id: uuid.UUID,
+    request: Request,
+    ctx: CompanyContext = Depends(require_permission("items.archive")),
+    db: Session = Depends(get_db),
+):
+    return service.restore_item(db, request, ctx, item_id)
 
 
 # ---------------------------------------------------------------------

@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import api from '@/api/index'
 import { formatMoney } from '@/lib/format'
 import Modal from '@/components/common/Modal'
-import { Plus, Search, Edit2, Save, Loader2, Archive, Package } from 'lucide-react'
+import { Plus, Search, Save, Loader2, Package } from 'lucide-react'
 
 export default function Items() {
   const { permissions } = useAuth()
-  const navigate = useNavigate()
   const [items, setItems] = useState<any[]>([])
   const [units, setUnits] = useState<any[]>([])
   const [categories, setCategories] = useState<any[]>([])
   const [taxRates, setTaxRates] = useState<any[]>([])
   const [search, setSearch] = useState('')
+  const [archivedOnly, setArchivedOnly] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [open, setOpen] = useState(false)
@@ -34,12 +33,12 @@ export default function Items() {
   useEffect(() => {
     load()
     loadLookups()
-  }, [search])
+  }, [search, archivedOnly])
 
   const load = async () => {
     setLoading(true)
     try {
-      const res = await api.get('/items', { params: { search: search || undefined, limit: 100 } })
+      const res = await api.get('/items', { params: { search: search || undefined, archived_only: archivedOnly, limit: 100 } })
       setItems(res.data as any[])
     } catch (e: any) {
       setError(e.message || 'Failed to load items')
@@ -132,6 +131,16 @@ export default function Items() {
     }
   }
 
+  const restore = async (id: string) => {
+    try {
+      setError('')
+      await api.post(`/items/${id}/restore`)
+      await load()
+    } catch (e: any) {
+      setError(e.message || 'Restore failed')
+    }
+  }
+
   return (
     <div className="p-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-3">
@@ -139,12 +148,20 @@ export default function Items() {
           <h1 className="text-2xl font-bold text-gray-900">Items</h1>
           <p className="text-gray-500">Products and services you sell or purchase.</p>
         </div>
-        {canCreate && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+            <button type="button" onClick={() => setArchivedOnly(false)} className={`px-3 py-1.5 ${!archivedOnly ? 'bg-brand-50 text-brand-700 font-semibold' : 'text-gray-600'}`}>Active</button>
+            <button type="button" onClick={() => setArchivedOnly(true)} className={`px-3 py-1.5 ${archivedOnly ? 'bg-brand-50 text-brand-700 font-semibold' : 'text-gray-600'}`}>Archived</button>
+          </div>
+          {canCreate && (
           <button onClick={openCreate} className="btn-primary flex items-center gap-2">
             <Package className="w-4 h-4" /> Add Item
           </button>
-        )}
+          )}
+        </div>
       </div>
+
+      {error && !open && <div className="mb-3 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">{error}</div>}
 
       <div className="relative mb-4">
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -176,7 +193,7 @@ export default function Items() {
               {loading ? (
                 <tr><td colSpan={7} className="p-4 text-center"><Loader2 className="w-5 h-5 animate-spin" /> Loading...</td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={7} className="p-4 text-center text-gray-400">No items found.</td></tr>
+                <tr><td colSpan={7} className="p-4 text-center text-gray-400">No {archivedOnly ? 'archived ' : ''}items found.</td></tr>
               ) : (
                 items.map((it) => (
                   <tr key={it.id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -187,11 +204,14 @@ export default function Items() {
                     <td className="text-right text-sm">{formatMoney(it.purchase_price)}</td>
                     <td className="text-center text-sm">{Number(it.opening_quantity).toFixed(2)}</td>
                     <td className="text-right">
-                      {canUpdate && (
-                        <button onClick={() => { openEdit(it); navigate(0) }} className="text-brand-600 hover:underline text-sm mr-3">Edit</button>
+                      {canUpdate && !it.is_archived && (
+                        <button onClick={() => openEdit(it)} className="text-brand-600 hover:underline text-sm mr-3">Edit</button>
                       )}
                       {canArchive && !it.is_archived && (
                         <button onClick={() => archive(it.id)} className="text-red-600 hover:underline text-sm">Archive</button>
+                      )}
+                      {canArchive && it.is_archived && (
+                        <button onClick={() => restore(it.id)} className="text-brand-600 hover:underline text-sm">Restore</button>
                       )}
                     </td>
                   </tr>
