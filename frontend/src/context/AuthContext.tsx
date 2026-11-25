@@ -1,5 +1,19 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react'
 import api, { User, CompanyBrief, CompanyDetail } from '@/api/index'
+
+type CompanyCreate = {
+  name: string
+  legal_name?: string | null
+  gstin?: string | null
+  pan?: string | null
+  email?: string | null
+  phone?: string | null
+  address_line1?: string | null
+  city?: string | null
+  state_code?: string | null
+  postal_code?: string | null
+  financial_year_start_month?: number
+}
 
 type AuthContextType = {
   user: User | null
@@ -11,7 +25,9 @@ type AuthContextType = {
   logout: () => void
   refresh: (refreshToken: string) => Promise<void>
   selectedCompany: CompanyBrief | null
-  selectCompany: (company: CompanyBrief) => void
+  selectCompany: (company: CompanyBrief) => Promise<void>
+  createCompany: (data: CompanyCreate) => Promise<void>
+  refreshCompanies: () => Promise<void>
   companyDetail: CompanyDetail | null
   permissions: string[]
   isOwner: boolean
@@ -33,65 +49,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [companyDetail, setCompanyDetail] = useState<CompanyDetail | null>(null)
   const [permissions, setPermissions] = useState<string[]>([])
   const [isOwner, setIsOwner] = useState(false)
+  const companyRequest = useRef(0)
 
-  useEffect(() => {
-    const token = localStorage.getItem('access_token')
-    if (token) {
-      api
-        .get('/auth/me')
-        .then((res) => {
-          const data = res.data as { user: User; companies: CompanyBrief[] }
-          setUser(data.user)
-          setCompanies(data.companies ?? [])
-          const stored = localStorage.getItem('selected_company_id')
-          if (stored && data.companies.some((c) => c.id === stored)) {
-            const c = data.companies.find((c) => c.id === stored)!
-            setSelectedCompanyState(c)
-            loadCompanyDetail(c.id)
-          } else if (data.companies.length > 0) {
-            const c = data.companies[0]
-            setSelectedCompanyState(c)
-            localStorage.setItem('selected_company_id', c.id)
-            loadCompanyDetail(c.id)
-          }
-        })
-        .catch(() => {
-          logout()
-        })
-        .finally(() => setLoading(false))
-    } else {
-      setLoading(false)
-    }
-  }, [])
-
-  const loadCompanyDetail = async (_companyId: string) => {
+  const loadCompanyDetail = async (companyId: string) => {
+    const request = ++companyRequest.current
     try {
-      const res = await api.get(`/companies/current`)
-      const data = res.data as CompanyDetail
-      setCompanyDetail(data)
-      setPermissions(data.permissions ?? [])
-      setIsOwner(!!data.is_owner)
-    } catch (e) {
+      const res = await api.get<CompanyDetail>('/companies/current', { headers: { 'X-Company-Id': companyId } })
+      if (request !== companyRequest.current) return
+      setCompanyDetail(res.data)
+      setPermissions(res.data.permissions ?? [])
+      setIsOwner(!!res.data.is_owner)
+    } catch {
+      if (request !== companyRequest.current) return
+      setCompanyDetail(null)
       setPermissions([])
       setIsOwner(false)
     }
   }
 
-  const login = async (email: string, password: string) => {
-    const res = await api.post('/auth/login', { email, password })
-    const data = res.data as { access_token: string; refresh_token: string }
-    localStorage.setItem('access_token', data.access_token)
-    localStorage.setItem('refresh_token', data.refresh_token)
-    const me = await api.get('/auth/me')
-    const meData = me.data as { user: User; companies: CompanyBrief[] }
-    setUser(meData.user)
-    setCompanies(meData.companies ?? [])
-    if (meData.companies.length > 0) {
-      const c = meData.companies[0]
-      setSelectedCompanyState(c)
-      localStorage.setItem('selected_company_id', c.id)
-      await loadCompanyDetail(c.id)
+  const activateCompany = async (company: CompanyBrief | null) => {
+    setSelectedCompanyState(company)
+    setCompanyDetail(null)
+    setPermissions([])
+    setIsOwner(false)
+    if (!company) {
+      ++companyRequest.current
+      localStorage.removeItem('selected_company_id')
+      return
     }
+    localStorage.setItem('selected_company_id', company.id)
+    await loadCompanyDetail(company.id)
+  }
+
+  const applyMe = async (data: { user: User; companies: CompanyBrief[] }, preferredId?: string) => {
+    const list = data.companies ?? []
+    setUser(data.user)
+    setCompanies(list)
+    const chosen = list.find((c) => c.id === preferredId) ?? list[0] ?? null
+    await activateCompany(chosen)
+  }
+
+  useEffect(() => {
+    if (!localStorage.getItem('access_token')) {
+      setLoading(false)
+      return
+    }
+    api.get<{ user: User; companies: CompanyBrief[] }>('/auth/me')
+      .then((res) => applyMe(res.data, localStorage.getItem('selected_company_id') ?? undefined))
+      .catch(() => logout())
+      .finally(() => setLoading(false))
+  }, [])
+
+  const login = async (email: string, password: string) => {
+    const res = await api.post<{ access_token: string; refresh_token: string }>('/auth/login', { email, password })
+    localStorage.setItem('access_token', res.data.access_token)
+    localStorage.setItem('refresh_token', res.data.refresh_token)
+    const me = await api.get<{ user: User; companies: CompanyBrief[] }>('/auth/me')
+    await applyMe(me.data, localStorage.getItem('selected_company_id') ?? undefined)
   }
 
   const register = async (data: { email: string; password: string; full_name: string; phone?: string }) => {
@@ -99,13 +113,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const refresh = async (refreshToken: string) => {
-    const res = await api.post('/auth/refresh', { refresh_token: refreshToken })
-    const data = res.data as { access_token: string; refresh_token: string }
-    localStorage.setItem('access_token', data.access_token)
-    localStorage.setItem('refresh_token', data.refresh_token)
+    const res = await api.post<{ access_token: string; refresh_token: string }>('/auth/refresh', { refresh_token: refreshToken })
+    localStorage.setItem('access_token', res.data.access_token)
+    localStorage.setItem('refresh_token', res.data.refresh_token)
   }
 
   const logout = () => {
+    ++companyRequest.current
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('selected_company_id')
@@ -119,17 +133,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const selectCompany = async (company: CompanyBrief) => {
-    setSelectedCompanyState(company)
-    localStorage.setItem('selected_company_id', company.id)
-    await loadCompanyDetail(company.id)
+    if (!companies.some((c) => c.id === company.id)) return
+    await activateCompany(company)
+  }
+
+  const createCompany = async (data: CompanyCreate) => {
+    const res = await api.post<CompanyBrief>('/companies', data)
+    setCompanies((current) => [...current, res.data])
+    await activateCompany(res.data)
+  }
+
+  const refreshCompanies = async () => {
+    const me = await api.get<{ user: User; companies: CompanyBrief[] }>('/auth/me')
+    await applyMe(me.data, selectedCompany?.id)
   }
 
   return (
-    <AuthContext.Provider value={{ user, companies, isAuthenticated: !!user, loading, login, register, logout, refresh, selectedCompany, selectCompany, companyDetail, permissions, isOwner }}>
+    <AuthContext.Provider value={{ user, companies, isAuthenticated: !!user, loading, login, register, logout, refresh, selectedCompany, selectCompany, createCompany, refreshCompanies, companyDetail, permissions, isOwner }}>
       {children}
     </AuthContext.Provider>
   )
 }
-
-
-

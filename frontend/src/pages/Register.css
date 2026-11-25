@@ -1,0 +1,23 @@
+.register-stage { padding-top: 88px; padding-bottom: 36px; }
+.register-card { padding-top: 30px; padding-bottom: 30px; }
+.register-card .login-card-heading { margin-bottom: 24px; }
+.register-card .login-form { gap: 14px; }
+.register-card .login-divider { margin: 21px 0 19px; }
+.register-password-hint { margin: 6px 0 0; color: #64848e; font-size: 12px; }
+.register-preview { display: flex; align-items: center; gap: 14px; width: min(100%, 410px); margin-top: 35px; padding: 17px; border: 1px solid #a6fff16b; border-radius: 17px; background: #ffffff24; box-shadow: 0 16px 35px #00645e24; color: white; }
+.register-preview-icon { display: grid; place-items: center; flex: 0 0 44px; height: 44px; border-radius: 12px; background: #ffffff31; }
+.register-preview-icon svg { width: 24px; height: 24px; }
+.register-preview strong, .register-preview span { display: block; }
+.register-preview strong { margin-bottom: 4px; font-size: 14px; }
+.register-preview span { color: #e2fffb; font-size: 12px; line-height: 1.4; }
+.register-preview-check { flex: 0 0 22px; width: 22px; height: 22px; margin-left: auto; color: #baffed; }
+
+@media (max-width: 760px) {
+  .register-stage { padding-top: 88px; }
+  .register-preview { display: none; }
+}
+
+@media (max-width: 420px) {
+  .register-stage { padding-top: 82px; }
+  .register-card { padding-top: 26px; padding-bottom: 26px; }
+}

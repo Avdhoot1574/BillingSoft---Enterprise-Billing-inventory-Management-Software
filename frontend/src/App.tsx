@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { AuthProvider } from '@/context/AuthContext'
 import { SidebarProvider, useSidebar } from '@/context/SidebarContext'
 import Sidebar from '@/components/layout/Sidebar'
 import TopBar from '@/components/layout/TopBar'
+import CreateCompanyDialog from '@/components/layout/CreateCompanyDialog'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
 import Dashboard from '@/pages/Dashboard'
@@ -38,12 +40,22 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
 
 function AppShell() {
   const { collapsed } = useSidebar()
+  const { selectedCompany } = useAuth()
+  const [creatingCompany, setCreatingCompany] = useState(false)
+  if (!selectedCompany) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <p className="text-slate-600">Set up your first company to get started.</p>
+        <CreateCompanyDialog required onClose={() => setCreatingCompany(false)} />
+      </div>
+    )
+  }
   return (
     <div className="relative">
-      <TopBar />
+      <TopBar onCreateCompany={() => setCreatingCompany(true)} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className={`flex-1 overflow-y-auto pt-16 pb-8 transition-all duration-300 ${
+        <main key={selectedCompany.id} className={`flex-1 overflow-y-auto pt-16 pb-8 transition-all duration-300 ${
           collapsed ? 'md:pl-16' : 'md:pl-64'
         }`}>
           <Routes>
@@ -65,6 +77,7 @@ function AppShell() {
           </Routes>
         </main>
       </div>
+      {creatingCompany && <CreateCompanyDialog onClose={() => setCreatingCompany(false)} />}
     </div>
   )
 }

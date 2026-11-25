@@ -4,7 +4,7 @@ import api from '@/api/index'
 import { Save, Loader2, Edit2, Building, Mail, Phone, MapPin, CreditCard, Calendar, Hash } from 'lucide-react'
 
 export default function CompanySettings() {
-  const { companyDetail, isOwner, permissions, selectCompany } = useAuth()
+  const { companyDetail, isOwner, permissions, refreshCompanies } = useAuth()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -41,13 +41,7 @@ export default function CompanySettings() {
       setSuccess('Company updated successfully')
       setSaving(false)
       setEditing(false)
-      // refresh company list to reflect name change
-      const me = await api.get('/auth/me')
-      const data = me.data as any
-      if (data.companies && data.companies.length) {
-        const c = data.companies.find((x: any) => x.id === companyDetail?.id) ?? data.companies[0]
-        selectCompany(c)
-      }
+      await refreshCompanies()
     } catch (e: any) {
       setError(e.message || 'Update failed')
       setSaving(false)

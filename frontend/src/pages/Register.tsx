@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { User, Mail, Phone, Lock, ArrowRight } from 'lucide-react'
+import { ShieldCheck, User, Mail, Phone, Lock, ArrowRight, Zap, Boxes, Cloud, FileText, CheckCircle2 } from 'lucide-react'
+import './Login.css'
+import './Register.css'
 
 export default function Register() {
   const [form, setForm] = useState({ full_name: '', email: '', phone: '', password: '' })
@@ -25,117 +27,83 @@ export default function Register() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="relative w-full max-w-2xl h-[650px] bg-white rounded-3xl shadow-2xl overflow-hidden">
-        {/* Decorative gradient background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-brand-500 to-brand-700 opacity-90 z-0 animate-float" />
-        <div className="absolute top-0 right-0 w-64 h-64 bg-brand-400/20 rounded-full blur-3xl -mr-32 -mt-32" />
-        <div className="absolute bottom-0 left-0 w-72 h-72 bg-brand-500/10 rounded-full blur-3xl -mb-32 -ml-32" />
-
-        {/* Brand header */}
-        <div className="absolute top-8 left-8 z-10 flex items-center gap-2">
-          <div className="w-8 h-8 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center border border-white/30">
-            <User className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-white font-bold text-xl tracking-tight">BillingSoft</span>
+    <main className="login-page register-page">
+      <div className="login-stage register-stage">
+        <div className="login-orb login-orb-one" aria-hidden="true" />
+        <div className="login-orb login-orb-two" aria-hidden="true" />
+        <div className="login-brand">
+          <span className="login-brand-mark"><ShieldCheck aria-hidden="true" /></span>
+          <span>BillingSoft</span>
         </div>
 
-        {/* Form card */}
-        <div className="relative z-10 w-full max-w-md mx-auto mt-20 animate-slide-up">
-          <div className="text-center mb-8">
-            <h2 className="text-2xl font-bold text-slate-900 mb-2">Create account</h2>
-            <p className="text-slate-500 text-sm">Join your billing platform</p>
+        <section className="login-intro" aria-labelledby="register-headline">
+          <h1 id="register-headline">Your business starts<br /><span>here
+            <svg className="login-underline" viewBox="0 0 280 18" aria-hidden="true"><path d="M5 10 Q120 -1 275 8 M55 16 Q150 3 270 11" /></svg>
+          </span></h1>
+          <p className="login-description">Create your account and bring your billing, inventory, and business details together in one place.</p>
+          <ul className="login-features">
+            <li><Zap aria-hidden="true" />Fast Invoicing</li>
+            <li><Boxes aria-hidden="true" />Inventory Tracking</li>
+            <li><ShieldCheck aria-hidden="true" />GST-Ready</li>
+            <li><Cloud aria-hidden="true" />Secure Cloud Access</li>
+          </ul>
+          <div className="register-preview" aria-hidden="true">
+            <div className="register-preview-icon"><FileText /></div>
+            <div><strong>One place for your business</strong><span>Create a company after you sign in and start managing its work.</span></div>
+            <CheckCircle2 className="register-preview-check" />
           </div>
+        </section>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="label">Full name</label>
-              <div className="relative">
-                <User className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                <input
-                  type="text"
-                  className="input pl-10"
-                  placeholder="John Doe"
-                  value={form.full_name}
-                  onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-                  required
-                />
+        <section className="login-card register-card" aria-labelledby="register-title">
+          <header className="login-card-heading">
+            <h2 id="register-title">Create account</h2>
+            <p>Get started with BillingSoft</p>
+          </header>
+          <form onSubmit={handleSubmit} className="login-form">
+            <div className="login-field">
+              <label htmlFor="register-name">Full name</label>
+              <div className="login-input-wrap">
+                <User aria-hidden="true" />
+                <input id="register-name" name="full_name" type="text" autoComplete="name" placeholder="John Doe"
+                  value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required />
               </div>
             </div>
-            <div>
-              <label className="label">Email address</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                <input
-                  type="email"
-                  className="input pl-10"
-                  placeholder="you@company.com"
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  required
-                />
+            <div className="login-field">
+              <label htmlFor="register-email">Email address</label>
+              <div className="login-input-wrap">
+                <Mail aria-hidden="true" />
+                <input id="register-email" name="email" type="email" autoComplete="email" placeholder="you@company.com"
+                  value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
               </div>
             </div>
-            <div>
-              <label className="label">Phone (optional)</label>
-              <div className="relative">
-                <Phone className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                <input
-                  type="tel"
-                  className="input pl-10"
-                  placeholder="+91 98765 43210"
-                  value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                />
+            <div className="login-field">
+              <label htmlFor="register-phone">Phone (optional)</label>
+              <div className="login-input-wrap">
+                <Phone aria-hidden="true" />
+                <input id="register-phone" name="phone" type="tel" autoComplete="tel" placeholder="+91 98765 43210"
+                  value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
               </div>
             </div>
-            <div>
-              <label className="label">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                <input
-                  type="password"
-                  className="input pl-10"
-                  placeholder="••••••••••"
-                  value={form.password}
-                  onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  required
-                  minLength={10}
-                />
+            <div className="login-field">
+              <label htmlFor="register-password">Password</label>
+              <div className="login-input-wrap">
+                <Lock aria-hidden="true" />
+                <input id="register-password" name="password" type="password" autoComplete="new-password"
+                  placeholder="••••••••••" value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={10} />
               </div>
-              <p className="text-xs text-slate-500 mt-1">Password must be at least 10 characters</p>
+              <p className="register-password-hint">At least 10 characters</p>
             </div>
-            {error && (
-              <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 border border-red-100">
-                {error}
-              </div>
-            )}
-            <button
-              type="submit"
-              className="btn-primary w-full flex items-center justify-center gap-2"
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <Loader className="w-4 h-4 animate-spin" /> Creating account...
-                </>
-              ) : (
-                <>
-                  Create account <ArrowRight className="w-4 h-4" />
-                </>
-              )}
+            {error && <div className="login-error" role="alert">{error}</div>}
+            <button type="submit" className="login-submit" disabled={loading} aria-busy={loading}>
+              {loading ? <><Loader className="animate-spin" /> Creating account...</> : <>Create account <ArrowRight aria-hidden="true" /></>}
             </button>
           </form>
-
-          <p className="mt-8 text-center text-sm text-slate-600">
-            Already have an account?{' '}
-            <Link to="/login" className="font-semibold text-brand-600 hover:text-brand-700 transition">
-              Sign in
-            </Link>
-          </p>
-        </div>
+          <div className="login-divider" aria-hidden="true"><span /></div>
+          <p className="login-register">Already have an account? <Link to="/login">Sign in</Link></p>
+        </section>
       </div>
-    </div>
+    </main>
   )
 }
 
