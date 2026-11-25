@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import api from '@/api/index'
-import { formatMoney } from '@/lib/format'
-import { FileText, Users, Package, TrendingUp, Building, ArrowRight } from 'lucide-react'
+import api, { Invoice } from '@/api/index'
+import { formatDate, formatMoney } from '@/lib/format'
+import { FileText, Users, Package, TrendingUp, ArrowRight } from 'lucide-react'
+
+type DashboardSummary = {
+  invoice_count: number | null
+  party_count: number | null
+  item_count: number | null
+  posted_invoice_value: number | null
+  recent_invoices: Invoice[] | null
+}
 
 type StatCard = {
   title: string
@@ -16,49 +24,60 @@ type StatCard = {
 export default function Dashboard() {
   const { permissions, selectedCompany } = useAuth()
   const navigate = useNavigate()
-  const [stats, setStats] = useState<{ invoices: number; parties: number; items: number; total: number }>({
-    invoices: 0,
-    parties: 0,
-    items: 0,
-    total: 0,
-  })
-  const [recent, setRecent] = useState<any[]>([])
+  const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      api.get('/invoices?limit=5').catch(() => ({ data: [] } as any)),
-      api.get('/parties?limit=1').catch(() => ({ data: [] } as any)),
-      api.get('/items?limit=1').catch(() => ({ data: [] } as any)),
-    ])
-      .then(([invRes, partyRes, itemRes]) => {
-        if (cancelled) return
-        const invoices = invRes.data as any[]
-        const parties = partyRes.data as any[]
-        const items = itemRes.data as any[]
-        setRecent(invoices)
-        setStats({
-          invoices: invoices.length,
-          parties: parties.length,
-          items: items.length,
-          total: invoices.reduce((s, inv) => s + (inv.grand_total ?? 0), 0),
-        })
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
-    return () => {
-      cancelled = true
+    let active = true
+    let controller: AbortController | null = null
+    setLoading(true)
+    setSummary(null)
+    setError('')
+    const refresh = async () => {
+      if (!selectedCompany) return
+      controller?.abort()
+      const request = new AbortController()
+      controller = request
+      try {
+        const res = await api.get<DashboardSummary>('/dashboard/summary', { signal: request.signal })
+        if (!active || request.signal.aborted) return
+        setSummary(res.data)
+        setError('')
+        setUpdatedAt(new Date())
+      } catch (err: any) {
+        if (!active || request.signal.aborted) return
+        setSummary(null)
+        setError(err.message || 'Dashboard data is unavailable')
+      } finally {
+        if (active && !request.signal.aborted) setLoading(false)
+      }
     }
-  }, [])
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    void refresh()
+    const interval = window.setInterval(refreshWhenVisible, 15000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshWhenVisible)
+    return () => {
+      active = false
+      controller?.abort()
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshWhenVisible)
+    }
+  }, [selectedCompany?.id, retryKey])
 
   const canCreateInvoice = permissions.includes('sales.invoice.create')
 
   const cards: StatCard[] = [
-    { title: 'Total Invoices', value: stats.invoices, subtitle: 'Sales documents', icon: FileText, color: 'bg-brand-500' },
-    { title: 'Parties', value: stats.parties, subtitle: 'Customers & suppliers', icon: Users, color: 'bg-indigo-500' },
-    { title: 'Items', value: stats.items, subtitle: 'Catalog items', icon: Package, color: 'bg-emerald-500' },
-    { title: 'Invoice Value', value: formatMoney(stats.total), subtitle: 'Grand total', icon: TrendingUp, color: 'bg-violet-500' },
+    { title: 'Total Invoices', value: summary?.invoice_count ?? '—', subtitle: 'All sales documents', icon: FileText, color: 'bg-brand-500' },
+    { title: 'Parties', value: summary?.party_count ?? '—', subtitle: 'Active customers & suppliers', icon: Users, color: 'bg-indigo-500' },
+    { title: 'Items', value: summary?.item_count ?? '—', subtitle: 'Active catalog items', icon: Package, color: 'bg-emerald-500' },
+    { title: 'Posted Invoice Value', value: summary?.posted_invoice_value == null ? '—' : formatMoney(summary.posted_invoice_value), subtitle: 'Excludes drafts & cancellations', icon: TrendingUp, color: 'bg-violet-500' },
   ]
 
   return (
@@ -79,6 +98,11 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {error && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        Dashboard data is unavailable: {error} <button type="button" onClick={() => setRetryKey((key) => key + 1)} className="ml-2 font-semibold underline">Retry</button>
+      </div>}
+      {updatedAt && !error && <p className="mb-4 text-right text-xs text-slate-400">Updated {updatedAt.toLocaleTimeString()}</p>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         {cards.map((card, idx) => (
@@ -111,7 +135,9 @@ export default function Dashboard() {
         </div>
         {loading ? (
           <div className="p-8 text-center text-slate-400 animate-pulse">Loading...</div>
-        ) : recent.length === 0 ? (
+        ) : summary?.recent_invoices == null ? (
+          <div className="p-8 text-center text-slate-400">{error ? 'Recent invoices are unavailable.' : 'You do not have access to invoices.'}</div>
+        ) : summary.recent_invoices.length === 0 ? (
           <div className="p-8 text-center text-slate-400">No invoices yet. Create your first invoice.</div>
         ) : (
           <div className="table-wrap">
@@ -126,10 +152,10 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {recent.map((inv, idx) => (
+                {summary.recent_invoices.map((inv) => (
                   <tr key={inv.id} className="hover:bg-slate-50 transition-colors">
                     <td className="font-medium">{inv.invoice_number ?? 'Draft'}</td>
-                    <td className="text-slate-600 text-sm">{inv.invoice_date}</td>
+                    <td className="text-slate-600 text-sm">{formatDate(inv.invoice_date)}</td>
                     <td>{inv.customer_name_snapshot}</td>
                     <td className="text-right">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
